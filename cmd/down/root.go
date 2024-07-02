@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"time"
 
 	"github.com/favbox/gopkg/util/downloader"
 	"github.com/spf13/cobra"
@@ -18,7 +17,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&Verbose, "verbose", "v", false, "详细输出")
 	rootCmd.PersistentFlags().StringVarP(&Url, "url", "u", "", "资源网址")
 	rootCmd.PersistentFlags().StringVarP(&Out, "out", "o", "", "输出路径")
-	rootCmd.PersistentFlags().IntVarP(&Conc, "conc", "c", 1, "并发数")
+	rootCmd.PersistentFlags().IntVarP(&Conc, "conc", "c", 0, "并发数")
 	err := rootCmd.MarkPersistentFlagRequired("url")
 	if err != nil {
 		log.Fatal(err)
@@ -32,15 +31,17 @@ var rootCmd = &cobra.Command{
 		fmt.Println("Verbose:", Verbose)
 		fmt.Println("Url:", Url)
 		fmt.Println("Out:", Out)
-		fmt.Println("Conc:", Conc)
+		if Conc == 0 {
+			fmt.Println("Conc: 自动")
+		} else {
+			fmt.Println("Conc:", Conc)
+		}
 
 		downloader.WithProgress(Verbose)
 
-		start := time.Now()
 		err := downloader.Download(Url, Out)
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Println("耗时", time.Since(start))
 	},
 }

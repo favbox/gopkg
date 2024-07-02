@@ -76,13 +76,13 @@ func DownloadWithChunks(url string, chunkNum int, filename ...string) (err error
 		}
 	}
 
-	chunks, _ := mustChunked(url, chunkNum)
+	chunks, totalBytes := mustChunked(url, chunkNum)
 	//log.Println("字节数:", totalBytes, "并行数:", len(chunks))
-	var bar = progressbar.New(len(chunks))
+	var bar = progressbar.DefaultBytes(int64(totalBytes), "下载中")
 	ch := make(chan int, len(chunks))
 	go func(ch <-chan int) {
-		for range ch {
-			err := bar.Add(1)
+		for bytes := range ch {
+			err := bar.Add(bytes)
 			if err != nil {
 				log.Fatal(fmt.Errorf("bar add 失败: %v", err))
 			}
@@ -128,7 +128,7 @@ func DownloadWithChunks(url string, chunkNum int, filename ...string) (err error
 func downChunk(url string, i int, chunk Chunk, ch chan<- int) (*ChunkedFile, error) {
 	defer func() {
 		if progress {
-			ch <- 1
+			ch <- chunk.End - chunk.Start
 		}
 	}()
 
