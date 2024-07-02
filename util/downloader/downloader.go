@@ -14,12 +14,15 @@ package downloader
 import (
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"sort"
 
 	"github.com/bytedance/gopkg/util/xxhash3"
+	"github.com/favbox/gopkg/util/filex"
 	"github.com/imroc/req/v3"
+	"github.com/schollz/progressbar/v3"
 	"github.com/sourcegraph/conc/pool"
 )
 
@@ -34,25 +37,62 @@ const (
 	MaxChunkNum int = 64
 )
 
-// Chunk 待下载数据块的字节区间。
-type Chunk struct {
-	Start int
-	End   int
-}
-type ChunkFile struct {
-	Index int
-	Name  string
+var progress bool
+
+type (
+	// Chunk 待下载数据块的字节区间。
+	Chunk struct {
+		Start int
+		End   int
+	}
+
+	// ChunkedFile 已下载的分块文件及序号
+	ChunkedFile struct {
+		Index int
+		Name  string
+	}
+)
+
+// WithProgress 设置是否使用进度条。全局变量，默认不启用。
+func WithProgress(b bool) {
+	progress = b
 }
 
-// Download 并行分块下载指定网址的资源到本地文件。
-func Download(url string, chunkNum int, filename string) error {
+// Download 并行分块下载指定网址的资源到本地。
+func Download(url string, filename ...string) error {
+	return DownloadWithChunks(url, 0, filename...)
+}
+
+// DownloadWithChunks 并行分块下载指定网址的资源到本地文件。
+func DownloadWithChunks(url string, chunkNum int, filename ...string) (err error) {
+	// 设置文件名称
+	var name string
+	if len(filename) > 0 && len(filename[0]) > 0 {
+		name = filename[0]
+	} else {
+		name, err = filex.GetNameFromURL(url)
+		if err != nil {
+			return err
+		}
+	}
+
 	chunks, _ := mustChunked(url, chunkNum)
 	//log.Println("字节数:", totalBytes, "并行数:", len(chunks))
+	var bar = progressbar.New(len(chunks))
+	ch := make(chan int, len(chunks))
+	go func(ch <-chan int) {
+		for range ch {
+			err := bar.Add(1)
+			if err != nil {
+				log.Fatal(fmt.Errorf("bar add 失败: %v", err))
+			}
+		}
+	}(ch)
 
-	g := pool.NewWithResults[*ChunkFile]().WithErrors().WithFirstError()
+	g := pool.NewWithResults[*ChunkedFile]().WithErrors().WithFirstError()
 	for i, chunk := range chunks {
-		g.Go(func() (*ChunkFile, error) {
-			return downChunk(url, i, chunk)
+		g.Go(func() (*ChunkedFile, error) {
+			return downChunk(url, i, chunk, ch)
 		})
 	}
 
@@ -68,7 +108,7 @@ func Download(url string, chunkNum int, filename string) error {
 	})
 
 	// 合并临时文件块
-	dst, err := os.Create(filename)
+	dst, err := os.Create(name)
 	if err != nil {
 		return err
 	}
@@ -85,7 +125,13 @@ func Download(url string, chunkNum int, filename string) error {
 	return nil
 }
 
-func downChunk(url string, i int, chunk Chunk) (*ChunkFile, error) {
+func downChunk(url string, i int, chunk Chunk, ch chan<- int) (*ChunkedFile, error) {
+	defer func() {
+		if progress {
+			ch <- 1
+		}
+	}()
+
 	resp, err := req.R().
 		SetHeader("Range", fmt.Sprintf("bytes=%v-%v", chunk.Start, chunk.End)).
 		Get(url)
@@ -102,6 +148,7 @@ func downChunk(url string, i int, chunk Chunk) (*ChunkFile, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		file.Close()
@@ -110,7 +157,7 @@ func downChunk(url string, i int, chunk Chunk) (*ChunkFile, error) {
 	}
 	//fmt.Println("分块长度", i, chunk.Start, chunk.End)
 
-	chunkFile := &ChunkFile{
+	chunkFile := &ChunkedFile{
 		Index: i,
 		Name:  file.Name(),
 	}

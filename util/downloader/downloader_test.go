@@ -68,12 +68,23 @@ func TestChunkedWithNumber(t *testing.T) {
 
 func TestDownload(t *testing.T) {
 	url := "https://qhrenderpicoss.kujiale.com/r/2023/12/17/L3D124S41ENDPBQX37QUWJD4KLUFX7FBVMI8_4000x3000.jpg"
-	chunkNums := []int{0, 3, 5}
+	chunkNums := []int{0, 1, 3, 5}
 
 	for _, chunkNum := range chunkNums {
 		start := time.Now()
-		err := Download(url, chunkNum, fmt.Sprintf("test-%d.jpg", chunkNum))
+		err := DownloadWithChunks(url, chunkNum, fmt.Sprintf("test-%d.jpg", chunkNum))
 		assert.Nil(t, err)
 		fmt.Println(chunkNum, time.Since(start))
 	}
+}
+
+func TestDownloadVideo(t *testing.T) {
+	WithProgress(true)
+
+	videoUrl := "https://sns-video-hw.xhscdn.com/1000g00g2ku4lp5cj20005o0d5ij09fivqklvkug"
+	start := time.Now()
+	err := Download(videoUrl, "四个动作，有效拉伸✨ ₊⁺细腿直腿一起get.mp4")
+	fmt.Println("耗时", time.Since(start))
+	assert.Nil(t, err)
+
 }
