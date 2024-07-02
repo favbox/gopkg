@@ -7,12 +7,20 @@
 // 3. 支持下载分块出错时自动重试
 //
 // 4. 自动安全地合并分块
+//
+// TODO 暂不支持断点续传的资源。
 package downloader
 
 import (
+	"fmt"
+	"io"
 	"math"
+	"os"
+	"sort"
 
+	"github.com/bytedance/gopkg/util/xxhash3"
 	"github.com/imroc/req/v3"
+	"github.com/sourcegraph/conc/pool"
 )
 
 const (
@@ -26,21 +34,99 @@ const (
 	MaxChunkNum int = 64
 )
 
-// Chunk 下载块的字节区间。
+// Chunk 待下载数据块的字节区间。
 type Chunk struct {
 	Start int
 	End   int
 }
+type ChunkFile struct {
+	Index int
+	Name  string
+}
 
 // Download 并行分块下载指定网址的资源到本地文件。
 func Download(url string, chunkNum int, filename string) error {
+	chunks, _ := mustChunked(url, chunkNum)
+	//log.Println("字节数:", totalBytes, "并行数:", len(chunks))
 
+	g := pool.NewWithResults[*ChunkFile]().WithErrors().WithFirstError()
+	for i, chunk := range chunks {
+		g.Go(func() (*ChunkFile, error) {
+			return downChunk(url, i, chunk)
+		})
+	}
+
+	// 处理并发结果
+	chunkFiles, err := g.Wait()
+	if err != nil {
+		return err
+	}
+
+	// 重排乱序的并发块文件
+	sort.Slice(chunkFiles, func(i, j int) bool {
+		return chunkFiles[i].Index < chunkFiles[j].Index
+	})
+
+	// 合并临时文件块
+	dst, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	// 拷贝分块文件至目标文件
+	for _, cf := range chunkFiles {
+		in, _ := os.Open(cf.Name)
+		_, err := io.Copy(dst, in)
+		in.Close()
+		os.Remove(in.Name())
+		if err != nil {
+			return fmt.Errorf("无法合并分块文件: %s, %v", cf.Name, err)
+		}
+	}
 	return nil
 }
 
-// MustChunked 返回资源的分块下载信息。
-func MustChunked(url string, chunkNumber ...int) ([]Chunk, int) {
-	chunks, totalBytes, err := Chunked(url, chunkNumber...)
+func downChunk(url string, i int, chunk Chunk) (*ChunkFile, error) {
+	resp, err := req.R().
+		SetHeader("Range", fmt.Sprintf("bytes=%v-%v", chunk.Start, chunk.End)).
+		Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsErrorState() {
+		return nil, fmt.Errorf("资源响应状态异常(%s: %s)", resp.GetStatus(), url)
+	}
+
+	// 写入分块临时文件
+	name := makeFilename(url, i)
+	file, err := os.CreateTemp("", name)
+	if err != nil {
+		return nil, err
+	}
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		return nil, err
+	}
+	//fmt.Println("分块长度", i, chunk.Start, chunk.End)
+
+	chunkFile := &ChunkFile{
+		Index: i,
+		Name:  file.Name(),
+	}
+	file.Close()
+
+	return chunkFile, nil
+}
+
+func makeFilename(url string, i int) string {
+	name := fmt.Sprintf("%d-%d", xxhash3.HashString(url), i)
+	return name
+}
+
+// mustChunked 返回资源的分块下载信息。
+func mustChunked(url string, chunkNumber ...int) ([]Chunk, int) {
+	chunks, totalBytes, err := chunked(url, chunkNumber...)
 	if err != nil {
 		return []Chunk{
 			{Start: 0, End: math.MaxInt},
@@ -49,8 +135,8 @@ func MustChunked(url string, chunkNumber ...int) ([]Chunk, int) {
 	return chunks, totalBytes
 }
 
-// Chunked 根据内容长度，对资源自动进行分块，并返回分块数量。 TODO 不支持断点续传的资源。
-func Chunked(url string, chunkNumber ...int) ([]Chunk, int, error) {
+// chunked 根据内容长度，对资源自动进行分块，并返回分块数量。 TODO 不支持断点续传的资源。
+func chunked(url string, chunkNumber ...int) ([]Chunk, int, error) {
 	// 获取内容长度
 	resp, err := req.Head(url)
 	if err != nil {
