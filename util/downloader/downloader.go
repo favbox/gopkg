@@ -8,7 +8,7 @@
 //
 // 4. 自动安全地合并分块
 //
-// TODO 暂不支持断点续传的资源。
+// TODO 未测试断点续传的资源。
 package downloader
 
 import (

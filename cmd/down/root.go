@@ -39,7 +39,7 @@ var rootCmd = &cobra.Command{
 
 		downloader.WithProgress(Verbose)
 
-		err := downloader.Download(Url, Out)
+		err := downloader.DownloadWithChunks(Url, Conc, Out)
 		if err != nil {
 			log.Fatal(err)
 		}
