@@ -12,6 +12,7 @@
 package downloader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -37,7 +38,14 @@ const (
 	MaxChunkNum int = 64
 )
 
-var progress bool
+var (
+	progress   bool
+	retryCount int
+)
+
+var (
+	ErrResourceNotFound = errors.New("资源不存在")
+)
 
 type (
 	// Chunk 待下载数据块的字节区间。
@@ -53,9 +61,14 @@ type (
 	}
 )
 
-// WithProgress 设置是否使用进度条。全局变量，默认不启用。
+// WithProgress 设置全局进度条。
 func WithProgress(b bool) {
 	progress = b
+}
+
+// WithRetryCount 设置全局重试次数。
+func WithRetryCount(v int) {
+	retryCount = v
 }
 
 // Download 并行分块下载指定网址的资源到本地。
@@ -76,18 +89,28 @@ func DownloadWithChunks(url string, chunkNum int, filename ...string) (err error
 		}
 	}
 
-	chunks, totalBytes := mustChunked(url, chunkNum)
+	chunks, totalBytes, err := chunked(url, chunkNum)
+	if err != nil {
+		return err
+	}
+
 	//log.Println("字节数:", totalBytes, "并行数:", len(chunks))
-	var bar = progressbar.DefaultBytes(int64(totalBytes), "下载中")
-	ch := make(chan int, len(chunks))
-	go func(ch <-chan int) {
-		for bytes := range ch {
-			err := bar.Add(bytes)
-			if err != nil {
-				log.Fatal(fmt.Errorf("bar add 失败: %v", err))
+	var ch chan int
+
+	if progress {
+		ch = make(chan int, len(chunks))
+		defer close(ch)
+
+		var bar = progressbar.DefaultBytes(int64(totalBytes), "下载中")
+		go func(ch <-chan int) {
+			for bytes := range ch {
+				err := bar.Add(bytes)
+				if err != nil {
+					log.Fatal(fmt.Errorf("bar add 失败: %v", err))
+				}
 			}
-		}
-	}(ch)
+		}(ch)
+	}
 
 	g := pool.NewWithResults[*ChunkedFile]().WithErrors().WithFirstError()
 	for i, chunk := range chunks {
@@ -132,7 +155,7 @@ func downChunk(url string, i int, chunk Chunk, ch chan<- int) (*ChunkedFile, err
 		}
 	}()
 
-	resp, err := req.R().
+	resp, err := req.SetCommonRetryCount(retryCount).R().
 		SetHeader("Range", fmt.Sprintf("bytes=%v-%v", chunk.Start, chunk.End)).
 		Get(url)
 	if err != nil {
@@ -188,6 +211,13 @@ func chunked(url string, chunkNumber ...int) ([]Chunk, int, error) {
 	resp, err := req.Head(url)
 	if err != nil {
 		return nil, 0, err
+	}
+	if resp.IsErrorState() {
+		if resp.GetStatusCode() == 404 {
+			return nil, 0, ErrResourceNotFound
+		} else {
+			return nil, 0, fmt.Errorf("URL: %s, ERR: %s", url, resp.GetStatus())
+		}
 	}
 	totalBytes := int(resp.ContentLength)
 
