@@ -11,11 +11,11 @@ func Ptr[T any](v T) *T {
 	return &v
 }
 
-// SliceToMap ToMap 切片转映射。
-func SliceToMap[K comparable, T any](s []T, f func(T) K) map[K]T {
+// ToMap ToMap 切片转映射。
+func ToMap[K comparable, T any](s []T, key func(T) K) map[K]T {
 	m := make(map[K]T, len(s))
 	for _, v := range s {
-		m[f(v)] = v
+		m[key(v)] = v
 	}
 	return m
 }

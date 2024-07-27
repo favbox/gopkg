@@ -2,6 +2,7 @@ package fns
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,14 @@ import (
 	"github.com/bytedance/gopkg/lang/channel"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestToMap(t *testing.T) {
+	ss := []string{"a", "b", "c"}
+	r := ToMap[int, string](ss, func(s string) int {
+		return slices.Index(ss, s)
+	})
+	fmt.Println(r)
+}
 
 func TestFilterParam(t *testing.T) {
 	ss := []string{"a", "b", "c", "bc"}
